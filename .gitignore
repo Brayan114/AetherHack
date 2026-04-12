@@ -1,0 +1,7 @@
+# Orbit Studios Security Exclusions
+node_modules/
+.env
+loot.json
+*.log
+dist/
+.DS_Store
