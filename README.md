@@ -1,73 +1,42 @@
-# AetherHack v1.0: Technical Documentation
+# AetherHack: Autonomous Security Intelligence
 
-## 1. Project Overview
-**AetherHack** is an autonomous security orchestration platform that bridges the gap between raw network reconnaissance and high-level tactical intelligence. By decoupling the execution kernel from the reasoning engine, AetherHack allows security researchers to leverage any Large Language Model (LLM) to perform context-aware vulnerability analysis and autonomous credential extraction.
+AetherHack is an LLM-Agnostic, Multi-Agent Offensive Security platform engineered to automate topography intelligence and offensive penetration mechanics natively. 
 
-The platform operates on a **Bring Your Own Key (BYOK)** model, ensuring that intelligence remains in the hands of the operator while providing a unified interface for cloud-based and local LLM providers.
+Powered by a dynamic reasoning loop and a WebGL spatial engine, it intercepts your commands, bridges directly into a Linux kernel (WSL or Native), parses the output stream via cutting edge logic, and recursively suggests subsequent tactical actions to aggressively map out your attack surface.
 
----
+## Core Features
 
-## 2. Code Architecture & System Flow
-The architecture is divided into three distinct layers to ensure modularity and high-performance execution.
+- **The Universal Neural Adapter**: Native backend bridging architecture processing streams dynamically across **Google Gemini**, **Anthropic (Claude)**, **Mistral**, **Perplexity**, and local **Ollama** infrastructure—without bloated SDK overheads.
+- **Operational Autonomy**: Terminal protocols function under stringently parsed states. Engage `HUNT` mode, and The Architect will seamlessly self-chain offensive commands with a two-second tactical delay, executing autonomously until a vector is definitively breached.
+- **RAG Knowledge Vault**: Built-in integration with Google Gemini embeddings to autonomously fetch the most relevant payloads and methodologies during attacks.
+- **Cross-Platform Cloud Readiness**: The execution engine dynamically detects its environment. Run it locally via Windows Subsystem for Linux (WSL), or deploy it natively to a Kali VPS or the TryHackMe AttackBox for zero-configuration hacking.
+- **Matrix 3D Spatial Recognition**: Built natively utilizing React-Three-Fiber, AetherHack visualizes unique clusters stored within your `Loot Vault` inside an optimized, rotating constellation of Nodes hovering cleanly beneath your console.
 
-### **A. The Execution Kernel (The Wraith)**
-* **Environment:** Native WSL (Windows Subsystem for Linux).
-* **Logic:** Executes system-level commands (e.g., `nmap`, `curl`) directly in a Linux environment.
-* **Streaming:** Real-time stdout and stderr streams are piped directly from the Linux process to the UI via WebSockets for zero-latency feedback.
+## Getting Started
 
-### **B. The Neural Link (Universal Adapter)**
-* **Modular Design:** A dependency-free REST bridge that supports multiple AI providers including Google Gemini, Anthropic (Claude), OpenAI, and local Ollama instances.
-* **Stream Normalization:** A custom engine that intercepts distinct Server-Sent Event (SSE) architectures and normalizes them into a unified tactical response format.
-* **Context Injection:** Each analysis utilizes a "Skill" protocol—a system prompt that defines the tactical constraints and response format for the agent.
+### Prerequisites
+- Node.js (v18+)
+- Linux Environment (TryHackMe AttackBox, Kali VPS, or Windows WSL with Ubuntu)
+- Your preferred Neural Provider API Key (OpenRouter, Gemini, Anthropic, etc)
 
-### **C. The Intelligence Vault (Persistence)**
-* **Loot Extraction:** A backend Regex-based interceptor identifies credentials (usernames, passwords, tokens) in the AI’s reasoning output.
-* **Database:** Extracted intelligence is committed to a persistent `loot.json` datastore and broadcast to the UI.
+### Initializing the Core
 
----
+Boot the backend API and Neural Interface:
+```bash
+# Terminal 1: Boot The Brain
+cd AetherHack
+npm install
+npm run dev
+```
 
-## 3. Operational Modes
-AetherHack features a stateful operational model to scale human capability through autonomous cycles.
+Boot the UI and WebGL Pipeline:
+```bash
+# Terminal 2: Boot The UI Component
+cd AetherHack/ui
+npm install
+npm run dev
+```
 
-* **Manual Mode:** Standard terminal interface where the operator retains 100% command control.
-* **Semi-Auto Mode:** The agent analyzes findings and pre-fills the command buffer with the next logical tactical move. The operator executes with a single keystroke.
-* **Hunt Mode (Recursive Autonomy):** The agent enters a recursive loop, executing its own suggested commands after a 2-second tactical delay. The loop terminates only upon completion of the objective or a system error.
+The system will connect and expose the primary interface at `localhost:5173`. Hit the Settings gear, load your Neural API parameters, select a mode, and execute `recon [TARGET_IP]`.
 
----
-
-## 4. User Guide & Implementation
-
-### **Prerequisites**
-1.  **Environment:** Windows with WSL2 enabled and a Linux distribution (e.g., Ubuntu) installed.
-2.  **Dependencies:** Node.js environment for the server and React frontend.
-
-### **Setup Sequence**
-1.  **Initialization:** Start the backend server to establish the WebSocket link.
-2.  **Neural Link Configuration:** Open the `Settings` modal to input your API key and select your preferred provider.
-3.  **Command Execution:**
-    * `recon <target>`: Initiates the Shadow Recon protocol (Nmap scan).
-    * `web <url>`: Executes the Web Protocol (source code audit and credential leak detection).
-    * `mode <manual|semi|hunt>`: Switches between operational autonomy levels.
-
----
-
-## 5. UI Text Refinement (Professional Polish)
-To ensure the platform maintains a professional, corporate-security aesthetic, replace the following strings in your source code:
-
-| Current String (`Terminal.tsx` / `server.ts`) | Professional Replacement |
-| :--- | :--- |
-| `Rick is sup4r cool` | `Security Audit: [TARGET_ID]` |
-| `...Burrrp... Morty...` (Web Audit Mock) | `[REDACTED SENSITIVE COMMENT]` |
-| `We are so not doing this again` | `Duplicate Session Detected: Skipping Recon.` |
-| `Wubbalubbadubdub` (Default Mock) | `[SECURE_STRING_ENCRYPTED]` |
-| `No Intelligence Gathered` | `Awaiting Intelligence Acquisition...` |
-
----
-
-## 6. Development Vision (Roadmap)
-* **Spatial Mapping:** Integration of 3D network node visualization for complex enterprise environments.
-* **Collaborative Vaults:** Distributed loot databases for multi-operator teams.
-* **Agent Swarms:** Parallel processing of targets using multiple neural link adapters.
-
-**Developer:** Brayan Osinaka (Orbit Studios)
-**Version:** 1.0.0-STABLE
+> **Notice:** The repository operates dynamically mapped intelligence paths. Executing `HUNT` procedures against unauthorized environments constitutes explicit violations of engagement protocols. AetherHack defaults to aggressive service enumeration. Use responsibly.

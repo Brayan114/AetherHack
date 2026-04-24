@@ -1,6 +1,6 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 
-export type NeuralProviderType = 'gemini' | 'openai' | 'ollama' | 'anthropic' | 'mistral' | 'perplexity' | 'custom';
+export type NeuralProviderType = 'gemini' | 'openai' | 'ollama' | 'anthropic' | 'mistral' | 'perplexity' | 'groq' | 'openrouter' | 'custom';
 
 export interface NeuralSettings {
     provider: NeuralProviderType;
@@ -44,6 +44,10 @@ export class NeuralLinkAdapter {
                     return { endpoint: 'http://127.0.0.1:11434/v1/chat/completions', defaultModel: 'llama3' };
                 case 'openai':
                     return { endpoint: 'https://api.openai.com/v1/chat/completions', defaultModel: 'gpt-4o' };
+                case 'groq':
+                    return { endpoint: 'https://api.groq.com/openai/v1/chat/completions', defaultModel: 'llama3-70b-8192' };
+                case 'openrouter':
+                    return { endpoint: 'https://openrouter.ai/api/v1/chat/completions', defaultModel: 'deepseek/deepseek-chat-v3-0324:free' };
                 case 'custom':
                 default:
                     return { endpoint: settings.baseUrl || '', defaultModel: settings.model || 'custom-model' };
@@ -65,6 +69,10 @@ export class NeuralLinkAdapter {
             if (!settings.apiKey) throw new Error("Anthropic requires a valid secure x-api-key.");
             headers['x-api-key'] = settings.apiKey;
             headers['anthropic-version'] = '2023-06-01';
+        } else if (settings.provider === 'openrouter') {
+            headers['Authorization'] = `Bearer ${settings.apiKey}`;
+            headers['HTTP-Referer'] = 'http://localhost:3000';
+            headers['X-Title'] = 'AetherHack AI Pentest Interface';
         } else if (settings.apiKey && settings.provider !== 'ollama') {
             headers['Authorization'] = `Bearer ${settings.apiKey}`;
         }

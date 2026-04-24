@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { io, Socket } from 'socket.io-client';
+import ReactMarkdown from 'react-markdown';
 
 const BOOT_SEQUENCE = [
     "Initializing Orbit Studios Kernel...",
@@ -17,7 +18,7 @@ const BOOT_SEQUENCE = [
     "Type 'recon' to initiate Shadow Protocol."
 ];
 
-type LineType = 'system' | 'raw' | 'analysis' | 'error';
+type LineType = 'system' | 'raw' | 'analysis' | 'error' | 'user_chat';
 interface TerminalLine {
     type: LineType;
     text: string;
@@ -32,7 +33,7 @@ interface LootData {
 }
 
 interface NeuralSettingsData {
-    provider: 'gemini' | 'openai' | 'ollama' | 'anthropic' | 'mistral' | 'perplexity' | 'custom';
+    provider: 'gemini' | 'openai' | 'ollama' | 'anthropic' | 'mistral' | 'perplexity' | 'groq' | 'custom';
     apiKey: string;
     baseUrl: string;
     model: string;
@@ -41,8 +42,10 @@ interface NeuralSettingsData {
 export const Terminal: React.FC = () => {
     const [lines, setLines] = useState<TerminalLine[]>([]);
     const [input, setInput] = useState('');
+    const [chatInput, setChatInput] = useState('');
     const [isScanning, setIsScanning] = useState(false);
     const [booted, setBooted] = useState(false);
+    const [isInteractivePrompt, setIsInteractivePrompt] = useState(false);
     
     // Modes
     type OperatingMode = 'manual' | 'semi' | 'hunt';
@@ -67,11 +70,17 @@ export const Terminal: React.FC = () => {
     });
 
     const socketRef = useRef<Socket | null>(null);
-    const endOfTerminalRef = useRef<HTMLDivElement>(null);
+    const leftScrollRef = useRef<HTMLDivElement>(null);
+    const rightScrollRef = useRef<HTMLDivElement>(null);
+    const inputRef = useRef<HTMLInputElement>(null);
 
     // Keep ref in sync for timeouts
     useEffect(() => {
         operatingModeRef.current = operatingMode;
+        if (operatingMode === 'manual') {
+            setIsScanning(false);
+            if (inputRef.current) inputRef.current.focus();
+        }
     }, [operatingMode]);
 
     useEffect(() => {
@@ -109,6 +118,9 @@ export const Terminal: React.FC = () => {
         });
 
         socket.on('scan-data', (chunk: string) => {
+            if (/(password for|\[sudo\]|Password:)/i.test(chunk)) {
+                setIsInteractivePrompt(true);
+            }
             setLines(prev => {
                 const newLines = [...prev];
                 const lastIndex = newLines.length - 1;
@@ -137,14 +149,17 @@ export const Terminal: React.FC = () => {
         socket.on('scan-status', (data: { status: string }) => {
             if (data.status === 'running') {
                 setIsScanning(true);
+                setIsInteractivePrompt(false);
             } else {
                 setIsScanning(false);
+                setIsInteractivePrompt(false);
                 setLines(prev => [...prev, { type: 'system', text: '[SYSTEM] Protocol Sequence Complete.' }]);
             }
         });
 
         socket.on('scan-error', (data) => {
             setIsScanning(false);
+            setIsInteractivePrompt(false);
             setLines(prev => [...prev, { type: 'error', text: `[ERROR] ${data.error}` }]);
             
             // Loop Protection: Disable Autonomy on failure
@@ -163,19 +178,23 @@ export const Terminal: React.FC = () => {
 
     // Auto-scroll handler
     useEffect(() => {
-        endOfTerminalRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, [lines, input]);
+        leftScrollRef.current?.scrollIntoView({ behavior: 'smooth' });
+        rightScrollRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, [lines, input, chatInput]);
+
+    const pendingExecutionRef = useRef(false);
 
     // Auto-Injector for Semi & Hunt Modes
     useEffect(() => {
-        if ((operatingMode === 'semi' || operatingMode === 'hunt') && !isScanning && lines.length > 0) {
+        if ((operatingMode === 'semi' || operatingMode === 'hunt') && !isScanning && !pendingExecutionRef.current && lines.length > 0) {
             const lastLine = [...lines].reverse().find(l => l.type === 'analysis');
             if (lastLine) {
-                const match = lastLine.text.match(/\[\?\] SUGGESTED_COMMAND:\s*(.+)/);
+                const match = lastLine.text.match(/```bash\s*([\s\S]+?)\s*```/);
                 if (match && lastInjectedRef.current !== match[1].trim()) {
                     const cmd = match[1].trim();
                     setInput(cmd);
                     lastInjectedRef.current = cmd;
+                    pendingExecutionRef.current = true;
 
                     // Fully Autonomous Trigger
                     if (operatingMode === 'hunt') {
@@ -186,8 +205,19 @@ export const Terminal: React.FC = () => {
                                 setInput('');
                             } else {
                                 setLines(prev => [...prev, { type: 'system', text: `[SYSTEM] Directive cancelled. Operator override detected.` }]);
+                                pendingExecutionRef.current = false;
                             }
                         }, 2000);
+                    } else {
+                        pendingExecutionRef.current = false;
+                    }
+                } else if (match && lastInjectedRef.current === match[1].trim()) {
+                    if (!pendingExecutionRef.current) {
+                        setLines(prev => {
+                            if (prev.length > 0 && prev[prev.length - 1].text.includes('Infinite Loop Prevention')) return prev;
+                            return [...prev, { type: 'error', text: `[SYSTEM OVERRIDE] Infinite Loop Prevention: AI suggested identical consecutive command. Halting autonomy.` }];
+                        });
+                        pendingExecutionRef.current = true;
                     }
                 }
             }
@@ -195,22 +225,25 @@ export const Terminal: React.FC = () => {
     }, [lines, isScanning, operatingMode]);
 
     const executeCommand = (rawInput: string) => {
+        pendingExecutionRef.current = false;
         if (!rawInput) return;
 
         setLines(prev => [...prev, { type: 'system', text: `> ${rawInput}` }]);
 
         const parts = rawInput.split(/\s+/);
-        const baseCommand = parts[0].toLowerCase();
-        const target = parts[1] || '127.0.0.1';
+        let baseCommand = parts[0].toLowerCase();
+        if (baseCommand === 'sudo' && parts.length > 1) {
+            baseCommand = parts[1].toLowerCase();
+        }
+        
+        let target = '127.0.0.1';
+        const potentialTarget = parts.find(p => p.match(/\b(?:\d{1,3}\.){3}\d{1,3}\b/) || p.startsWith('http'));
+        if (potentialTarget) target = potentialTarget;
+        else if (parts.length > 1) target = parts[parts.length - 1]; // Assume last arg is target if no regex match
 
-        if (baseCommand === 'recon') {
-            setLines(prev => [...prev, { type: 'system', text: `[SYSTEM] Neural link established. Target acquired: ${target}` }]);
-            socketRef.current?.emit('run-scan', { target, settings: neural });
-        } else if (baseCommand === 'web') {
-            setLines(prev => [...prev, { type: 'system', text: `[SYSTEM] Extracting source code via Web Protocol from: ${target}` }]);
-            socketRef.current?.emit('run-web-audit', { target, settings: neural });
-        } else if (baseCommand === 'mode' && (target === 'manual' || target === 'semi' || target === 'hunt')) {
+        if (baseCommand === 'mode' && (target === 'manual' || target === 'semi' || target === 'hunt')) {
             setOperatingMode(target as OperatingMode);
+            setIsScanning(false);
             setLines(prev => [...prev, { type: 'system', text: `[SYSTEM] Tactical Mode Engaged: [${target.toUpperCase()}]` }]);
             if (target === 'manual') {
                 setInput('');
@@ -218,22 +251,53 @@ export const Terminal: React.FC = () => {
             }
         } else if (baseCommand === 'clear') {
             setLines([]);
+        } else if (baseCommand === 'reset') {
+            setLines(prev => [...prev, { type: 'system', text: `[SYSTEM] Purging Neural Link memory banks...` }]);
+            socketRef.current?.emit('reset-memory');
+        } else if (baseCommand === 'memory') {
+            setLines(prev => [...prev, { type: 'system', text: `[SYSTEM] Extracting active session memory...` }]);
+            socketRef.current?.emit('pull-memory');
+        } else if (baseCommand === 'agent') {
+            setLines(prev => [...prev, { type: 'system', text: `[SYSTEM] Forwarding natural language protocol to Autonomous Agent...` }]);
+            setIsScanning(true);
+            socketRef.current?.emit('run-agent', { prompt: rawInput.replace(/^agent\s+/i, ''), settings: neural });
         } else {
-            setLines(prev => [...prev, { type: 'error', text: `Command not recognized: ${baseCommand}` }]);
+            setLines(prev => [...prev, { type: 'system', text: `[SYSTEM] Executing raw terminal directive...` }]);
+            setIsScanning(true);
+            socketRef.current?.emit('run-command', { command: rawInput, settings: neural });
         }
-        
-        lastInjectedRef.current = null;
     };
 
     const handleCommand = (e: React.KeyboardEvent<HTMLInputElement>) => {
         if (booted && !settingsOpen) {
             if (e.key === 'Enter') {
-                executeCommand(input.trim());
-                setInput('');
+                if (isInteractivePrompt) {
+                    socketRef.current?.emit('stdin-input', { input: input });
+                    setIsInteractivePrompt(false);
+                    setInput('');
+                    setLines(prev => [...prev, { type: 'system', text: `[SYSTEM] Authorization token transmitting...` }]);
+                } else {
+                    executeCommand(input.trim());
+                    setInput('');
+                }
             } else if (e.key === ' ' && (operatingMode === 'semi' || operatingMode === 'hunt') && input.trim().length > 0 && input === lastInjectedRef.current) {
                 e.preventDefault();
-                executeCommand(input.trim());
-                setInput('');
+                if (!isInteractivePrompt) {
+                    executeCommand(input.trim());
+                    setInput('');
+                }
+            }
+        }
+    };
+
+    const handleChatCommand = (e: React.KeyboardEvent<HTMLInputElement>) => {
+        if (booted && !settingsOpen && !isScanning && e.key === 'Enter') {
+            if (chatInput.trim() !== '') {
+                setLines(prev => [...prev, { type: 'user_chat', text: chatInput.trim() }]);
+                setLines(prev => [...prev, { type: 'system', text: `[SYSTEM] Forwarding natural language protocol to Architect: "${chatInput.trim()}"` }]);
+                setIsScanning(true);
+                socketRef.current?.emit('run-agent', { prompt: chatInput.trim(), settings: neural });
+                setChatInput('');
             }
         }
     };
@@ -253,7 +317,7 @@ export const Terminal: React.FC = () => {
     };
 
     return (
-        <div style={{ position: 'relative', width: '100vw', height: '100vh', overflow: 'hidden', display: 'flex', backgroundColor: '#000' }}>
+        <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden', display: 'flex', flexDirection: 'row', backgroundColor: '#000' }}>
             
             {/* Settings Overlay Modal */}
             {settingsOpen && (
@@ -280,8 +344,10 @@ export const Terminal: React.FC = () => {
                         <option value="openai">OpenAI</option>
                         <option value="anthropic">Anthropic (Claude)</option>
                         <option value="mistral">Mistral AI</option>
+                        <option value="openrouter">OpenRouter</option>
                         <option value="perplexity">Perplexity</option>
                         <option value="ollama">Local (Ollama)</option>
+                        <option value="groq">Groq</option>
                         <option value="custom">Custom REST Endpoint</option>
                     </select>
 
@@ -324,126 +390,222 @@ export const Terminal: React.FC = () => {
                 </div>
             )}
 
-            {/* The Main Terminal Window */}
-            <div style={{
-                flex: 1,
-                backgroundColor: '#0a0a0a',
-                color: '#00ff41',
-                fontFamily: '"Fira Code", monospace',
-                padding: '20px',
-                overflowY: 'auto',
-                transition: 'all 0.3s ease-in-out',
-                marginRight: vaultOpen ? '400px' : '0px',
-                boxSizing: 'border-box',
-                boxShadow: operatingMode === 'hunt' ? 'inset 0 0 30px rgba(255, 0, 60, 0.4)' : 'none',
-                border: operatingMode === 'hunt' ? '2px solid rgba(255, 0, 60, 0.8)' : '2px solid transparent',
-                animation: operatingMode === 'hunt' ? 'huntPulse 2s infinite' : 'none',
-                filter: settingsOpen ? 'brightness(0.2)' : 'none'
-            }}>
-                <div style={{ position: 'fixed', top: '20px', right: vaultOpen ? '420px' : '20px', zIndex: 1000, display: 'flex', gap: '15px', transition: 'right 0.3s ease' }}>
-                    
-                    {/* Tactical Mode Toggle Panel */}
-                    <div style={{ display: 'flex', border: '1px solid #333', backgroundColor: '#111' }}>
-                        <button 
-                            onClick={() => { setOperatingMode('manual'); setLines(p => [...p, {type: 'system', text: '[SYSTEM] Tactical Mode Engaged: [MANUAL]'}]); }}
-                            style={{ padding: '8px 12px', background: operatingMode === 'manual' ? '#00ff41' : 'transparent', color: operatingMode === 'manual' ? '#0a0a0a' : '#00ff41', border: 'none', cursor: 'pointer', fontFamily: '"Fira Code", monospace', fontWeight: 'bold' }}
-                        >MANUAL</button>
-                        <button 
-                            onClick={() => { setOperatingMode('semi'); setLines(p => [...p, {type: 'system', text: '[SYSTEM] Tactical Mode Engaged: [SEMI]'}]); }}
-                            style={{ padding: '8px 12px', background: operatingMode === 'semi' ? '#00ff88' : 'transparent', color: operatingMode === 'semi' ? '#0a0a0a' : '#00ff88', border: 'none', borderLeft: '1px solid #333', cursor: 'pointer', fontFamily: '"Fira Code", monospace', fontWeight: 'bold' }}
-                        >SEMI</button>
-                        <button 
-                            onClick={() => { setOperatingMode('hunt'); setLines(p => [...p, {type: 'system', text: '[SYSTEM] Tactical Mode Engaged: [HUNT]'}]); }}
-                            style={{ padding: '8px 12px', background: operatingMode === 'hunt' ? '#ff003c' : 'transparent', color: operatingMode === 'hunt' ? '#0a0a0a' : '#ff003c', border: 'none', borderLeft: '1px solid #333', cursor: 'pointer', fontFamily: '"Fira Code", monospace', fontWeight: 'bold' }}
-                        >HUNT</button>
+            {/* Flex Container for Split Pane */}
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'row', overflow: 'hidden' }}>
+
+                {/* Left Pane - Main Terminal (70%) */}
+                <div style={{
+                    flex: '0.7',
+                    backgroundColor: '#0a0a0a',
+                    color: '#00ff41',
+                    fontFamily: '"Fira Code", monospace',
+                    padding: '20px',
+                    overflowY: 'auto',
+                    overflowX: 'hidden',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    transition: 'all 0.3s ease-in-out',
+                    boxSizing: 'border-box',
+                    borderRight: '2px solid rgba(0, 255, 65, 0.3)',
+                    boxShadow: operatingMode === 'hunt' ? 'inset 0 0 30px rgba(255, 0, 60, 0.4)' : 'none',
+                    animation: operatingMode === 'hunt' ? 'huntPulse 2s infinite' : 'none',
+                    filter: settingsOpen ? 'brightness(0.2)' : 'none'
+                }}>
+                    {/* Header Controls */}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '20px', zIndex: 1000 }}>
+                        {/* Tactical Mode Toggle Panel */}
+                        <div style={{ display: 'flex', border: '1px solid #333', backgroundColor: '#111' }}>
+                            <button 
+                                onClick={() => { setOperatingMode('manual'); setLines(p => [...p, {type: 'system', text: '[SYSTEM] Tactical Mode Engaged: [MANUAL]'}]); }}
+                                style={{ padding: '8px 12px', background: operatingMode === 'manual' ? '#00ff41' : 'transparent', color: operatingMode === 'manual' ? '#0a0a0a' : '#00ff41', border: 'none', cursor: 'pointer', fontFamily: '"Fira Code", monospace', fontWeight: 'bold' }}
+                            >MANUAL</button>
+                            <button 
+                                onClick={() => { setOperatingMode('semi'); setLines(p => [...p, {type: 'system', text: '[SYSTEM] Tactical Mode Engaged: [SEMI]'}]); }}
+                                style={{ padding: '8px 12px', background: operatingMode === 'semi' ? '#00ff88' : 'transparent', color: operatingMode === 'semi' ? '#0a0a0a' : '#00ff88', border: 'none', borderLeft: '1px solid #333', cursor: 'pointer', fontFamily: '"Fira Code", monospace', fontWeight: 'bold' }}
+                            >SEMI</button>
+                            <button 
+                                onClick={() => { setOperatingMode('hunt'); setLines(p => [...p, {type: 'system', text: '[SYSTEM] Tactical Mode Engaged: [HUNT]'}]); }}
+                                style={{ padding: '8px 12px', background: operatingMode === 'hunt' ? '#ff003c' : 'transparent', color: operatingMode === 'hunt' ? '#0a0a0a' : '#ff003c', border: 'none', borderLeft: '1px solid #333', cursor: 'pointer', fontFamily: '"Fira Code", monospace', fontWeight: 'bold' }}
+                            >HUNT</button>
+                        </div>
+                        <div style={{ display: 'flex', gap: '15px', marginRight: vaultOpen ? '420px' : '0px', transition: 'margin-right 0.3s ease' }}>
+                            <button
+                                onClick={() => setSettingsOpen(true)}
+                                style={{
+                                    backgroundColor: '#111', color: '#00ff88', border: '1px solid #00ff88',
+                                    padding: '8px 16px', cursor: 'pointer', fontFamily: '"Fira Code", monospace',
+                                }}
+                            >
+                                [ ⚙️ SETTINGS ]
+                            </button>
+                            <button
+                                onClick={() => setVaultOpen(!vaultOpen)}
+                                style={{
+                                    backgroundColor: '#111', color: vaultOpen ? '#ff003c' : '#00ff88',
+                                    border: `1px solid ${vaultOpen ? '#ff003c' : '#00ff88'}`, padding: '8px 16px',
+                                    cursor: 'pointer', fontFamily: '"Fira Code", monospace', transition: 'background-color 0.2s',
+                                }}
+                            >
+                                {vaultOpen ? '[ CLOSE VAULT ]' : `[ OPEN VAULT (${vaultLoot.length}) ]`}
+                            </button>
+                        </div>
                     </div>
 
-                    <button
-                        onClick={() => setSettingsOpen(true)}
-                        style={{
-                            backgroundColor: '#111',
-                            color: '#00ff88',
-                            border: '1px solid #00ff88',
-                            padding: '8px 16px',
-                            cursor: 'pointer',
-                            fontFamily: '"Fira Code", monospace',
-                        }}
-                    >
-                        [ ⚙️ SETTINGS ]
-                    </button>
-                    <button
-                        onClick={() => setVaultOpen(!vaultOpen)}
-                        style={{
-                            backgroundColor: '#111',
-                            color: vaultOpen ? '#ff003c' : '#00ff88',
-                            border: `1px solid ${vaultOpen ? '#ff003c' : '#00ff88'}`,
-                            padding: '8px 16px',
-                            cursor: 'pointer',
-                            fontFamily: '"Fira Code", monospace',
-                            transition: 'background-color 0.2s',
-                        }}
-                    >
-                        {vaultOpen ? '[ CLOSE VAULT ]' : `[ OPEN VAULT (${vaultLoot.length}) ]`}
-                    </button>
+                    <div style={{ flex: 1 }}>
+                        {lines.filter(l => l.type !== 'analysis').map((line, idx) => (
+                            <div key={idx} style={{ padding: '2px 0', whiteSpace: 'pre-wrap', wordBreak: 'break-all', ...getLineStyle(line.type) }}>
+                                {line.text}
+                            </div>
+                        ))}
+                        <div ref={leftScrollRef} />
+                    </div>
+
+                    {booted && (!isScanning || isInteractivePrompt) && (
+                        <div style={{ display: 'flex', marginTop: '10px' }}>
+                            <span style={{ marginRight: '10px', color: operatingMode === 'hunt' ? '#ff003c' : '#00ff41' }}>root@NODE_729:~$</span>
+                            <input
+                                ref={inputRef}
+                                type={isInteractivePrompt ? "password" : "text"}
+                                placeholder={isInteractivePrompt ? "AWAITING AUTHORIZATION..." : ""}
+                                value={input}
+                                onChange={(e) => setInput(e.target.value)}
+                                onKeyDown={handleCommand}
+                                style={{
+                                    backgroundColor: 'transparent',
+                                    color: (operatingMode === 'hunt' || operatingMode === 'semi') && input === lastInjectedRef.current ? '#00ff88' : '#00ff41',
+                                    border: 'none', outline: 'none', flex: 1, fontFamily: '"Fira Code", monospace', fontSize: '1em',
+                                    textShadow: operatingMode === 'hunt' ? '0 0 5px #ff003c' : 'none'
+                                }}
+                                autoFocus
+                            />
+                        </div>
+                    )}
                 </div>
 
-                <div>
-                    {lines.map((line, idx) => {
-                        const suggestMatch = line.type === 'analysis' ? line.text.match(/\[\?\] SUGGESTED_COMMAND:\s*(.+)/) : null;
-                        return (
-                            <div key={idx} style={{
-                                padding: '2px 0',
-                                whiteSpace: 'pre-wrap',
-                                wordBreak: 'break-all',
-                                ...getLineStyle(line.type)
-                            }}>
-                                {line.text}
-                                {suggestMatch && !isScanning && operatingMode === 'manual' && (
-                                    <button 
-                                        onClick={() => executeCommand(suggestMatch[1].trim())}
-                                        style={{
-                                            marginLeft: '15px',
-                                            backgroundColor: '#00ff88',
-                                            color: '#0a0a0a',
-                                            border: 'none',
-                                            padding: '2px 8px',
-                                            cursor: 'pointer',
-                                            fontWeight: 'bold',
-                                            fontFamily: '"Fira Code", monospace'
+                {/* Right Pane - Neural Link (30%) */}
+                <div style={{
+                    flex: '0.3',
+                    backgroundColor: '#1c1b1b',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    padding: '20px',
+                    overflowY: 'auto',
+                    overflowX: 'hidden',
+                    boxSizing: 'border-box',
+                    filter: settingsOpen ? 'brightness(0.2)' : 'none'
+                }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px' }}>
+                        <div style={{ width: '40px', height: '40px', backgroundColor: '#3a3939', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #00ff41' }}>
+                            <span style={{ color: '#00ff41', fontWeight: 'bold' }}>AI</span>
+                        </div>
+                        <div>
+                            <h2 style={{ margin: 0, fontSize: '1.2em', color: '#efe500', textTransform: 'uppercase', lineHeight: '1.1', fontFamily: '"Space Grotesk", sans-serif' }}>Architect</h2>
+                            <p style={{ margin: 0, fontSize: '0.75em', color: '#00ff41', textTransform: 'uppercase', opacity: 0.8 }}>NEURAL_LINK_ESTABLISHED</p>
+                        </div>
+                    </div>
+
+                    <h3 style={{ fontSize: '0.75em', textTransform: 'uppercase', color: '#00ff41', fontWeight: 'bold', borderBottom: '1px solid rgba(0,255,65,0.2)', paddingBottom: '8px', marginBottom: '16px' }}>Active Reasoning</h3>
+
+                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '15px' }}>
+                        {lines.filter(l => l.type === 'analysis' || l.type === 'user_chat').map((line, idx, arr) => {
+                            const isLastMessage = idx === arr.length - 1;
+                            if (line.type === 'user_chat') {
+                                return (
+                                    <div key={idx} style={{ 
+                                        alignSelf: 'flex-end', backgroundColor: '#003907', border: '1px solid #00ff41',
+                                        padding: '10px 15px', color: '#00ff41', fontFamily: '"Fira Code", monospace', 
+                                        fontSize: '0.85em', borderRadius: '8px 8px 0 8px', maxWidth: '80%', wordBreak: 'break-word',
+                                        boxShadow: '0 0 10px rgba(0,255,65,0.1)'
+                                    }}>
+                                        {line.text}
+                                    </div>
+                                );
+                            }
+
+                            return (
+                                <div key={idx} style={{
+                                    alignSelf: 'flex-start', backgroundColor: '#201f1f', padding: '15px', 
+                                    border: '1px solid rgba(132, 150, 126, 0.3)', color: '#b9ccb2', 
+                                    fontFamily: '"Fira Code", monospace', fontSize: '0.85em', lineHeight: '1.5',
+                                    borderRadius: '8px 8px 8px 0', maxWidth: '95%', wordBreak: 'break-word',
+                                    position: 'relative'
+                                }}>
+                                    <ReactMarkdown
+                                        components={{
+                                            code: ({ node, inline, className, children, ...props }: any) => {
+                                                const match = /language-(\w+)/.exec(className || '');
+                                                if (!inline && match && match[1] === 'bash') {
+                                                    const cmdText = String(children).replace(/\n$/, '');
+                                                    return (
+                                                        <div style={{ marginTop: '10px', paddingTop: '10px', borderTop: '1px solid rgba(132,150,126,0.2)' }}>
+                                                            <span style={{ color: '#00ff41', fontSize: '0.8em', display: 'block', marginBottom: '4px' }}>&#91; SUGGESTED COMMAND &#93;</span>
+                                                            <pre style={{ background: '#0a0a0a', padding: '10px', overflowX: 'auto', color: '#fff', margin: 0, border: '1px solid #333' }}>
+                                                                <code {...props}>{cmdText}</code>
+                                                            </pre>
+                                                            {!isScanning && (operatingMode === 'manual' || operatingMode === 'semi') && isLastMessage ? (
+                                                                <button 
+                                                                    onClick={() => executeCommand(cmdText)}
+                                                                    style={{
+                                                                        width: '100%', marginTop: '10px', backgroundColor: '#00ff41', color: '#003907',
+                                                                        border: 'none', padding: '8px', cursor: 'pointer', fontWeight: 'bold',
+                                                                        textTransform: 'uppercase', boxShadow: '0 0 10px rgba(0,255,65,0.2)',
+                                                                        transition: 'all 0.2s'
+                                                                    }}
+                                                                >
+                                                                    EXECUTE
+                                                                </button>
+                                                            ) : isScanning && isLastMessage ? (
+                                                                <div style={{
+                                                                    width: '100%', marginTop: '10px', backgroundColor: '#003907', color: '#00ff41',
+                                                                    border: '1px solid #00ff41', padding: '8px', textAlign: 'center', fontWeight: 'bold',
+                                                                    textTransform: 'uppercase', fontSize: '0.9em', boxSizing: 'border-box'
+                                                                }}>
+                                                                    [ EXECUTING PAYLOAD... ]
+                                                                </div>
+                                                            ) : (
+                                                                <div style={{
+                                                                    width: '100%', marginTop: '10px', backgroundColor: '#111', color: '#555',
+                                                                    border: '1px solid #333', padding: '8px', textAlign: 'center', fontWeight: 'bold',
+                                                                    textTransform: 'uppercase', fontSize: '0.9em', boxSizing: 'border-box'
+                                                                }}>
+                                                                    [ EXPIRED PAYLOAD ]
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    );
+                                                }
+                                                return <code className={className} style={{ background: '#111', padding: '2px 4px', borderRadius: '4px', color: '#ffb86c' }} {...props}>{children}</code>;
+                                            }
                                         }}
                                     >
-                                        EXECUTE
-                                    </button>
-                                )}
-                            </div>
-                        );
-                    })}
-                </div>
+                                        {line.text}
+                                    </ReactMarkdown>
+                                </div>
+                            );
+                        })}
+                        <div ref={rightScrollRef} />
+                    </div>
 
-                {booted && (
-                    <div style={{ display: 'flex', marginTop: '10px' }}>
-                        <span style={{ marginRight: '10px', color: operatingMode === 'hunt' ? '#ff003c' : '#00ff41' }}>&gt;</span>
+                    <div style={{ marginTop: '16px', display: 'flex', alignItems: 'center', borderTop: '1px solid rgba(0,255,65,0.2)', paddingTop: '16px' }}>
+                        <span style={{ color: '#00ff41', marginRight: '8px' }}>&gt;</span>
                         <input
                             type="text"
-                            value={input}
-                            onChange={(e) => setInput(e.target.value)}
-                            onKeyDown={handleCommand}
+                            placeholder={isScanning ? "PROCESSING..." : "Message The Architect..."}
+                            value={chatInput}
+                            onChange={(e) => setChatInput(e.target.value)}
+                            onKeyDown={handleChatCommand}
                             style={{
-                                backgroundColor: 'transparent',
-                                color: (operatingMode === 'hunt' || operatingMode === 'semi') && input === lastInjectedRef.current ? '#00ff88' : '#00ff41',
-                                border: 'none',
-                                outline: 'none',
-                                flex: 1,
-                                fontFamily: '"Fira Code", monospace',
-                                fontSize: '1em',
-                                textShadow: operatingMode === 'hunt' ? '0 0 5px #ff003c' : 'none'
+                                flex: 1, background: 'transparent', border: 'none', outline: 'none', color: '#00ff41',
+                                fontFamily: '"Fira Code", monospace', fontSize: '0.85em'
                             }}
-                            autoFocus
+                            disabled={!booted || isScanning}
                         />
                     </div>
-                )}
-                <div ref={endOfTerminalRef} />
+                </div>
+
             </div>
+
+
 
             {/* Tactical Loot Vault Sidebar */}
             <div style={{
